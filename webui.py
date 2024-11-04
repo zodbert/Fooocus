@@ -23,6 +23,8 @@ from modules.private_logger import get_current_html_path
 from modules.ui_gradio_extensions import reload_javascript
 from modules.auth import auth_enabled, check_auth
 from modules.util import is_json
+import nest_asyncio
+from pyngrok import ngrok
 
 def get_task(*args):
     args = list(args)
@@ -1115,13 +1117,20 @@ def dump_default_english_config():
     dump_english_config(grh.all_components)
 
 
+
 # dump_default_english_config()
+
+auth_token=os.getenv("NGROK")
+ngrok.set_auth_token(auth_token)
+ngrok_tunnel = ngrok.connect(7865)
+print('Public URL:', ngrok_tunnel.public_url)
+nest_asyncio.apply()
 
 shared.gradio_root.launch(
     inbrowser=args_manager.args.in_browser,
     server_name=args_manager.args.listen,
     server_port=args_manager.args.port,
-    share=args_manager.args.share,
+    share=False,
     auth=check_auth if (args_manager.args.share or args_manager.args.listen) and auth_enabled else None,
     allowed_paths=[modules.config.path_outputs],
     blocked_paths=[constants.AUTH_FILENAME]
