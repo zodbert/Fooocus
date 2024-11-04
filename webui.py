@@ -1112,42 +1112,94 @@ with shared.gradio_root:
                 .then(fn=style_sorter.sort_styles, inputs=style_selections, outputs=style_selections, queue=False, show_progress=False) \
                 .then(lambda: None, _js='()=>{refresh_style_localization();}')
 
-async def initialize_server():
-    # Apply nest_asyncio to allow nested event loops
-    nest_asyncio.apply()
-    
-    def dump_default_english_config():
-        from modules.localization import dump_english_config
-        dump_english_config(grh.all_components)
-    
-    try:
-        # Set up ngrok
-        auth_token = os.getenv("NGROK")
-        if not auth_token:
-            raise ValueError("NGROK auth token not found in environment variables")
-        
-        ngrok.set_auth_token(auth_token)
-        ngrok_tunnel = ngrok.connect(7865)
-        print('Public URL:', ngrok_tunnel.public_url)
-        
-        # Launch Gradio interface
-        shared.gradio_root.launch(
-            inbrowser=args_manager.args.in_browser,
-            server_name=args_manager.args.listen,
-            server_port=args_manager.args.port,
-            share=False,
-            auth=check_auth if (args_manager.args.share or args_manager.args.listen) and auth_enabled else None,
-            allowed_paths=[modules.config.path_outputs],
-            blocked_paths=[constants.AUTH_FILENAME]
-        )
-        
-    except Exception as e:
-        print(f"Error during server initialization: {str(e)}")
-        if 'ngrok_tunnel' in locals():
-            ngrok.disconnect(ngrok_tunnel.public_url)
-        raise
+import atexit
+import signal
+import sys
 
-# Usage
-if __name__ == "__main__":
+class ServerManager:
+    def __init__(self):
+        self.ngrok_tunnel = None
+        self.gradio_app = None
+        self.setup_signal_handlers()
+
+    def setup_signal_handlers(self):
+        # Register cleanup for normal exit
+        atexit.register(self.cleanup)
+        
+        # Register signal handlers
+        signal.signal(signal.SIGINT, self.signal_handler)
+        signal.signal(signal.SIGTERM, self.signal_handler)
+
+    def cleanup(self):
+        print("Performing cleanup...")
+        if self.ngrok_tunnel:
+            try:
+                ngrok.disconnect(self.ngrok_tunnel.public_url)
+                print("Ngrok tunnel closed")
+            except Exception as e:
+                print(f"Error closing ngrok tunnel: {e}")
+        
+        if self.gradio_app:
+            try:
+                self.gradio_app.close()
+                print("Gradio server closed")
+            except Exception as e:
+                print(f"Error closing Gradio server: {e}")
+
+    def signal_handler(self, signum, frame):
+        print(f"\nReceived signal {signum}")
+        self.cleanup()
+        sys.exit(0)
+
+    async def initialize_server(self):
+        try:
+            # Apply nest_asyncio early
+            nest_asyncio.apply()
+            
+            def dump_default_english_config():
+                from modules.localization import dump_english_config
+                dump_english_config(grh.all_components)
+            
+            # Set up ngrok
+            auth_token = os.getenv("NGROK")
+            if not auth_token:
+                raise ValueError("NGROK auth token not found in environment variables")
+            
+            ngrok.set_auth_token(auth_token)
+            self.ngrok_tunnel = ngrok.connect(7865)
+            print('Public URL:', self.ngrok_tunnel.public_url)
+            
+            # Launch Gradio interface
+            self.gradio_app = shared.gradio_root.launch(
+                inbrowser=args_manager.args.in_browser,
+                server_name=args_manager.args.listen,
+                server_port=args_manager.args.port,
+                share=False,
+                auth=check_auth if (args_manager.args.share or args_manager.args.listen) and auth_enabled else None,
+                allowed_paths=[modules.config.path_outputs],
+                blocked_paths=[constants.AUTH_FILENAME]
+            )
+            
+            # Keep the server running
+            await self.gradio_app.block_thread()
+            
+        except Exception as e:
+            print(f"Error during server initialization: {str(e)}")
+            self.cleanup()
+            raise
+
+def main():
+    server_manager = ServerManager()
+    
     import asyncio
-    asyncio.run(initialize_server())
+    try:
+        asyncio.run(server_manager.initialize_server())
+    except KeyboardInterrupt:
+        print("\nShutdown requested...")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+    finally:
+        server_manager.cleanup()
+
+if __name__ == "__main__":
+    main()
