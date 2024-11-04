@@ -1112,26 +1112,42 @@ with shared.gradio_root:
                 .then(fn=style_sorter.sort_styles, inputs=style_selections, outputs=style_selections, queue=False, show_progress=False) \
                 .then(lambda: None, _js='()=>{refresh_style_localization();}')
 
-def dump_default_english_config():
-    from modules.localization import dump_english_config
-    dump_english_config(grh.all_components)
+async def initialize_server():
+    # Apply nest_asyncio to allow nested event loops
+    nest_asyncio.apply()
+    
+    def dump_default_english_config():
+        from modules.localization import dump_english_config
+        dump_english_config(grh.all_components)
+    
+    try:
+        # Set up ngrok
+        auth_token = os.getenv("NGROK")
+        if not auth_token:
+            raise ValueError("NGROK auth token not found in environment variables")
+        
+        ngrok.set_auth_token(auth_token)
+        ngrok_tunnel = ngrok.connect(7865)
+        print('Public URL:', ngrok_tunnel.public_url)
+        
+        # Launch Gradio interface
+        shared.gradio_root.launch(
+            inbrowser=args_manager.args.in_browser,
+            server_name=args_manager.args.listen,
+            server_port=args_manager.args.port,
+            share=False,
+            auth=check_auth if (args_manager.args.share or args_manager.args.listen) and auth_enabled else None,
+            allowed_paths=[modules.config.path_outputs],
+            blocked_paths=[constants.AUTH_FILENAME]
+        )
+        
+    except Exception as e:
+        print(f"Error during server initialization: {str(e)}")
+        if 'ngrok_tunnel' in locals():
+            ngrok.disconnect(ngrok_tunnel.public_url)
+        raise
 
-
-
-# dump_default_english_config()
-
-auth_token=os.getenv("NGROK")
-ngrok.set_auth_token(auth_token)
-ngrok_tunnel = ngrok.connect(7865)
-print('Public URL:', ngrok_tunnel.public_url)
-nest_asyncio.apply()
-
-shared.gradio_root.launch(
-    inbrowser=args_manager.args.in_browser,
-    server_name=args_manager.args.listen,
-    server_port=args_manager.args.port,
-    share=False,
-    auth=check_auth if (args_manager.args.share or args_manager.args.listen) and auth_enabled else None,
-    allowed_paths=[modules.config.path_outputs],
-    blocked_paths=[constants.AUTH_FILENAME]
-)
+# Usage
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(initialize_server())
